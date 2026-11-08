@@ -1,0 +1,26 @@
+{
+    "hsv_otsu": {
+        "mean_iou": 0.6457096336600254,
+        "std_iou": 0.38438150407200844,
+        "mean_dice": 0.7011409883046613,
+        "mean_pixel_accuracy": 0.8192046130952381,
+        "mean_precision": 0.6606306157135521,
+        "mean_recall": 0.9515879800795927
+    },
+    "hsv_adaptive": {
+        "mean_iou": 0.6373370837431196,
+        "std_iou": 0.37950856974127894,
+        "mean_dice": 0.696454583433367,
+        "mean_pixel_accuracy": 0.819194103422619,
+        "mean_precision": 0.6465670580043739,
+        "mean_recall": 0.962388100560531
+    },
+    "bg_subtraction": {
+        "mean_iou": 0.6785165176926108,
+        "std_iou": 0.2027038597369557,
+        "mean_dice": 0.7895157148589439,
+        "mean_pixel_accuracy": 0.9812530691964287,
+        "mean_precision": 0.7681710610378579,
+        "mean_recall": 0.904270251931311
+    }
+}

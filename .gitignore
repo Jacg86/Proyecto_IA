@@ -1,0 +1,19 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environments
+venv/
+env/
+.venv/
+
+# OS files
+Thumbs.db
+.DS_Store
