@@ -3,11 +3,45 @@ Configuration module for the LEGO piece segmentation and classification project.
 Defines paths, class names, constants, and hyperparameters.
 """
 import os
-import torch
+import sys
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+# Ensure Conda Library/bin DLLs (freetype, libpng, blas) are on PATH when running from .venv or CLI
+_conda_bin = os.path.join(sys.base_prefix, "Library", "bin")
+if os.path.isdir(_conda_bin):
+    os.environ["PATH"] = _conda_bin + os.pathsep + os.environ.get("PATH", "")
+    if hasattr(os, "add_dll_directory"):
+        os.add_dll_directory(_conda_bin)
 
 # Base project paths
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-DATASET_ROOT = os.path.join(PROJECT_ROOT, "LEGO_BRICKS")
+
+# Allow Spyder's default runtime (Python 3.12) to seamlessly import packages installed in .venv
+_VENV_SITE = os.path.join(PROJECT_ROOT, ".venv", "Lib", "site-packages")
+if os.path.isdir(_VENV_SITE) and _VENV_SITE not in sys.path:
+    sys.path.append(_VENV_SITE)
+
+import cv2
+import torch
+torch.set_num_threads(1)
+
+def _resolve_dataset_root():
+    candidates = [
+        os.path.join(PROJECT_ROOT, "LEGO_BRICKS"),
+        os.path.join(PROJECT_ROOT, "LEGO_BRICKS", "LEGO_BRICKS"),
+        os.path.join(os.path.dirname(PROJECT_ROOT), "LEGO_BRICKS", "LEGO_BRICKS"),
+        os.path.join(os.path.dirname(PROJECT_ROOT), "LEGO_BRICKS"),
+        os.path.join(os.path.dirname(os.path.dirname(PROJECT_ROOT)), "proyecto final", "LEGO_BRICKS", "LEGO_BRICKS"),
+        os.path.join(os.path.dirname(os.path.dirname(PROJECT_ROOT)), "proyecto final", "LEGO_BRICKS"),
+        r"C:\Users\jaime\Documents\curso de IA\proyecto final\LEGO_BRICKS\LEGO_BRICKS",
+    ]
+    for cand in candidates:
+        if os.path.isdir(os.path.join(cand, "Base Images")) or os.path.isdir(os.path.join(cand, "Cropped Images")):
+            return cand
+    return os.path.join(PROJECT_ROOT, "LEGO_BRICKS")
+
+DATASET_ROOT = _resolve_dataset_root()
 BASE_IMAGES_DIR = os.path.join(DATASET_ROOT, "Base Images")
 CROPPED_IMAGES_DIR = os.path.join(DATASET_ROOT, "Cropped Images")
 BG_BACKLIT_A = os.path.join(DATASET_ROOT, "background_backlit_A.jpg")

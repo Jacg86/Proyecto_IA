@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import cv2
+import joblib
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from skimage.feature import hog
@@ -24,6 +25,86 @@ class LEGOFeatureExtractor:
         self.scaler_shape = StandardScaler()
         self.scaler_all = StandardScaler()
         self.is_fitted = False
+
+    def load_or_fit_scaler(self, scenario="shape_and_color"):
+        """
+        Loads cached StandardScaler for inference, or reconstructs it exactly from
+        the precomputed training NPZ matrix and a small subset of training images.
+        """
+        scaler_file = os.path.join(
+            config.DATA_DIR,
+            "scaler_all.joblib" if scenario == "shape_and_color" else "scaler_shape.joblib"
+        )
+        if os.path.exists(scaler_file):
+            scaler = joblib.load(scaler_file)
+            if scenario == "shape_and_color":
+                self.scaler_all = scaler
+            else:
+                self.scaler_shape = scaler
+            self.is_fitted = True
+            return scaler
+
+        npz_file = os.path.join(
+            config.DATA_DIR,
+            "features_shape_and_color.npz" if scenario == "shape_and_color" else "features_shape_only.npz"
+        )
+        splits_file = os.path.join(config.DATA_DIR, "dataset_splits.json")
+        if os.path.exists(npz_file) and os.path.exists(splits_file) and os.path.isdir(config.CROPPED_IMAGES_DIR):
+            z_train = np.load(npz_file)["X_train"]
+            with open(splits_file, "r", encoding="utf-8") as f:
+                splits = json.load(f)
+            train_records = splits["train"]
+
+            # Sample 60 evenly-spaced records across all classes to reconstruct exact affine parameters
+            step = max(1, len(train_records) // 60)
+            sample_indices = list(range(0, len(train_records), step))[:60]
+            raw_list = []
+            z_list = []
+            for idx in sample_indices:
+                rec = train_records[idx]
+                fpath = os.path.join(config.CROPPED_IMAGES_DIR, rec["relative_path"])
+                img = cv2.imread(fpath)
+                if img is not None:
+                    feats = self.extract_shape_features(img) if scenario == "shape_only" else self.extract_all_features(img)
+                    raw_list.append(feats)
+                    z_list.append(z_train[idx])
+
+            if len(raw_list) >= 10:
+                X_sub = np.array(raw_list, dtype=np.float64)
+                Z_sub = np.array(z_list, dtype=np.float64)
+                std_x = np.std(X_sub, axis=0)
+                std_z = np.std(Z_sub, axis=0)
+                scale = np.where(std_z > 1e-6, std_x / np.maximum(std_z, 1e-12), 1.0)
+                mean = np.mean(X_sub, axis=0) - scale * np.mean(Z_sub, axis=0)
+
+                scaler = StandardScaler()
+                scaler.mean_ = mean.astype(np.float64)
+                scaler.scale_ = scale.astype(np.float64)
+                scaler.var_ = (scale ** 2).astype(np.float64)
+                scaler.n_features_in_ = X_sub.shape[1]
+                scaler.n_samples_seen_ = len(train_records)
+                joblib.dump(scaler, scaler_file)
+                if scenario == "shape_and_color":
+                    self.scaler_all = scaler
+                else:
+                    self.scaler_shape = scaler
+                self.is_fitted = True
+                return scaler
+
+        return None
+
+    def extract_and_scale_single(self, img_bgr, scenario="shape_and_color"):
+        """
+        Extracts feature vector from a single BGR image crop and applies the training StandardScaler.
+        """
+        raw_feats = self.extract_shape_features(img_bgr) if scenario == "shape_only" else self.extract_all_features(img_bgr)
+        raw_2d = raw_feats.reshape(1, -1)
+        scaler = self.scaler_shape if (scenario == "shape_only" and self.is_fitted) else (
+            self.scaler_all if self.is_fitted else self.load_or_fit_scaler(scenario=scenario)
+        )
+        if scaler is not None and hasattr(scaler, "mean_"):
+            return scaler.transform(raw_2d).astype(np.float32)
+        return raw_2d.astype(np.float32)
 
     def extract_shape_features(self, img_bgr):
         """
@@ -173,6 +254,7 @@ def prepare_and_cache_features(force_recompute=False):
     X_train_shape_s = scaler_shape.fit_transform(X_train_shape)
     X_val_shape_s = scaler_shape.transform(X_val_shape)
     X_test_shape_s = scaler_shape.transform(X_test_shape)
+    joblib.dump(scaler_shape, os.path.join(config.DATA_DIR, "scaler_shape.joblib"))
     
     np.savez_compressed(
         out_file_shape,
@@ -193,6 +275,7 @@ def prepare_and_cache_features(force_recompute=False):
     X_train_all_s = scaler_all.fit_transform(X_train_all)
     X_val_all_s = scaler_all.transform(X_val_all)
     X_test_all_s = scaler_all.transform(X_test_all)
+    joblib.dump(scaler_all, os.path.join(config.DATA_DIR, "scaler_all.joblib"))
     
     np.savez_compressed(
         out_file_all,

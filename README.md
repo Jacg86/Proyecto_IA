@@ -17,8 +17,8 @@ Sistema integral en Python para la identificación, localización mediante segme
   - [Etapa 7: Pipeline de Inferencia End-to-End](#etapa-7-pipeline-de-inferencia-end-to-end)
 - [5. Estructura del Repositorio](#5-estructura-del-repositorio)
 - [6. Instrucciones de Ejecución](#6-instrucciones-de-ejecución)
+  - [Ejecución en Spyder IDE (Recomendado)](#ejecución-en-spyder-ide-recomendado)
   - [Ejecución por Consola (CLI)](#ejecución-por-consola-cli)
-  - [Aplicación Web Interactiva (Streamlit)](#aplicación-web-interactiva-streamlit)
   - [Cuaderno Jupyter](#cuaderno-jupyter)
 
 ---
@@ -86,10 +86,10 @@ Evaluación sobre el conjunto de prueba independiente (687 muestras balanceadas)
 
 ```text
 Proyecto_LEGO/
+├── Proyecto_Final_Spyder.py      # Script principal por celdas (# %%) para Spyder IDE
 ├── config.py                     # Constantes, rutas, hiperparámetros y semillas
 ├── main.py                       # CLI maestro ejecutable del proyecto
 ├── pipeline.py                   # Pipeline integrado de inferencia end-to-end
-├── app.py                        # Dashboard interactivo en Streamlit
 ├── generate_notebook.py          # Generador del cuaderno Jupyter
 ├── preprocessing/
 │   ├── dataset_explorer.py       # Análisis exploratorio estadístico
@@ -127,6 +127,12 @@ Proyecto_LEGO/
 
 ## 6. Instrucciones de Ejecución
 
+### Ejecución en Spyder IDE (Recomendado):
+Abrir [`Proyecto_Final_Spyder.py`](Proyecto_Final_Spyder.py) en **Spyder 6** y presionar **`F5`** (o ejecutar bloque por bloque `# %%` con **`Ctrl + Enter`**):
+- Todas las matrices estandarizadas (`X_train`, `X_test`, `y_train`, `y_test`), las matrices de confusión (`cm_cnn`, `cm_svm`, `cm_ann`, `cm_perceptron`, `cm_sgadaline`, `cm_arbol`) y la tabla comparativa (`df_comparacion_porcentaje`) quedan disponibles en el **Explorador de Variables (*Variable Explorer*)**.
+- Todas las gráficas de desempeño, curvas de entrenamiento y pruebas de segmentación/clasificación se visualizan directamente en el panel **Plots**.
+- En la última celda (`# %% 7`), se puede probar cualquier imagen ejecutando `probar_imagen_en_spyder(abrir_ventana_archivo=True)`.
+
 ### Ejecución por Consola (CLI):
 ```bash
 # 1. Ejecutar el flujo completo de principio a fin:
@@ -138,12 +144,6 @@ python main.py --stage segment      # Evaluación cuantitativa de segmentación 
 python main.py --stage features     # Extracción y guardado de características
 python main.py --stage train        # Entrenamiento y evaluación de los 6 modelos
 python main.py --stage inference    # Inferencia demostrativa end-to-end sobre imágenes base
-```
-
-### Aplicación Web Interactiva (Streamlit):
-Para interactuar visualmente con el sistema, ajustar umbrales en tiempo real y probar piezas:
-```bash
-streamlit run app.py
 ```
 
 ### Cuaderno Jupyter:

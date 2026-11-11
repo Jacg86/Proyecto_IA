@@ -192,23 +192,45 @@ class LEGOCNN(BaseLEGOModel):
                 all_preds.extend(preds)
         return np.array(all_preds)
 
-    def predict_single_image(self, img_bgr):
+    def predict_proba_single_image(self, img_bgr, use_tta=False):
+        """
+        Returns the 20-class probability distribution for a single BGR image crop.
+        When use_tta=True, evaluates horizontal flip (matching training augmentation)
+        and checks 90-degree rotation if initial confidence is low on vertical crops.
+        """
+        self.net.eval()
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        pil_base = Image.fromarray(img_rgb)
+
+        def _eval_pil_list(pil_list):
+            tensors = torch.stack([
+                self.eval_transform(v.resize(config.CNN_INPUT_SIZE, Image.Resampling.BILINEAR))
+                for v in pil_list
+            ]).to(self.device)
+            with torch.no_grad():
+                logits = self.net(tensors)
+                return torch.softmax(logits, dim=1).mean(dim=0).cpu().numpy()
+
+        if not use_tta:
+            return _eval_pil_list([pil_base])
+
+        probs_main = _eval_pil_list([pil_base, pil_base.transpose(Image.Transpose.FLIP_LEFT_RIGHT)])
+        # If crop is vertical and confidence is moderate/low, check 90-degree rotated orientation
+        if img_bgr.shape[0] > img_bgr.shape[1] * 1.15 and float(np.max(probs_main)) < 0.75:
+            pil_rot = pil_base.transpose(Image.Transpose.ROTATE_90)
+            probs_rot = _eval_pil_list([pil_rot, pil_rot.transpose(Image.Transpose.FLIP_LEFT_RIGHT)])
+            if float(np.max(probs_rot)) > float(np.max(probs_main)):
+                return probs_rot
+        return probs_main
+
+    def predict_single_image(self, img_bgr, use_tta=False):
         """
         Inference on a single cv2 BGR image crop.
         Returns: predicted_class_idx, confidence, class_name
         """
-        self.net.eval()
-        # Convert BGR to RGB PIL
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(img_rgb).resize(config.CNN_INPUT_SIZE, Image.Resampling.BILINEAR)
-        tensor = self.eval_transform(pil_img).unsqueeze(0).to(self.device)
-        
-        with torch.no_grad():
-            logits = self.net(tensor)
-            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-            pred_idx = int(np.argmax(probs))
-            conf = float(probs[pred_idx])
-            
+        probs = self.predict_proba_single_image(img_bgr, use_tta=use_tta)
+        pred_idx = int(np.argmax(probs))
+        conf = float(probs[pred_idx])
         return pred_idx, conf, config.IDX_TO_CLASS[pred_idx]
 
     def plot_learning_curves(self):
