@@ -24,6 +24,13 @@ class HSVSegmenter:
         self.bg_a = cv2.imread(config.BG_BACKLIT_A) if os.path.exists(config.BG_BACKLIT_A) else None
         self.bg_b = cv2.imread(config.BG_BACKLIT_B) if os.path.exists(config.BG_BACKLIT_B) else None
 
+    def _suppress_border(self, mask):
+        h_i, w_i = mask.shape[:2]
+        b = max(2, min(12, int(min(h_i, w_i) * 0.025)))
+        inner_mask = np.zeros((h_i, w_i), dtype=np.uint8)
+        inner_mask[b:h_i - b, b:w_i - b] = 255
+        return cv2.bitwise_and(mask, inner_mask)
+
     def segment_hsv_otsu(self, img):
         """
         Segment using HSV color space and Otsu thresholding:
@@ -38,20 +45,15 @@ class HSVSegmenter:
         # 1. Mask for colored pieces via S channel Otsu
         _, mask_s = cv2.threshold(s_channel, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
-        # 2. Mask for dark / black pieces via V channel
-        # Safe inverted V threshold to catch dark pieces without catching background variations
-        _, mask_v = cv2.threshold(v_channel, self.dark_v_thresh, 255, cv2.THRESH_BINARY_INV)
+        # 2. Mask for dark / black pieces and shadowed 3D brick walls via V channel
+        med_v = float(np.median(v_channel))
+        adaptive_v_thresh = max(self.dark_v_thresh, min(172, int(med_v - 32)))
+        _, mask_v = cv2.threshold(v_channel, adaptive_v_thresh, 255, cv2.THRESH_BINARY_INV)
         
         # 3. Combine with bitwise OR
         mask_combined = cv2.bitwise_or(mask_s, mask_v)
         
-        # Suppress camera/fixture border margins (15 pixels around perimeter)
-        h_i, w_i = img.shape[:2]
-        inner_mask = np.zeros((h_i, w_i), dtype=np.uint8)
-        inner_mask[12:h_i-12, 12:w_i-12] = 255
-        mask_combined = cv2.bitwise_and(mask_combined, inner_mask)
-        
-        return mask_combined
+        return self._suppress_border(mask_combined)
 
     def segment_hsv_adaptive(self, img):
         """
@@ -80,13 +82,7 @@ class HSVSegmenter:
         combined = cv2.bitwise_or(mask_s, mask_v)
         combined = cv2.bitwise_or(combined, cv2.bitwise_and(fg_hue_contrast, edge_dilated))
         
-        # Suppress borders
-        h_i, w_i = img.shape[:2]
-        inner_mask = np.zeros((h_i, w_i), dtype=np.uint8)
-        inner_mask[12:h_i-12, 12:w_i-12] = 255
-        combined = cv2.bitwise_and(combined, inner_mask)
-        
-        return combined
+        return self._suppress_border(combined)
 
     def segment_background_subtraction(self, img):
         """
@@ -97,15 +93,13 @@ class HSVSegmenter:
             return self.segment_hsv_otsu(img)
             
         bg = self.bg_b if self.bg_b is not None else self.bg_a
+        if bg.shape[:2] != img.shape[:2]:
+            bg = cv2.resize(bg, (img.shape[1], img.shape[0]))
         diff = cv2.absdiff(img, bg)
         diff_gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
         _, mask = cv2.threshold(diff_gray, 25, 255, cv2.THRESH_BINARY)
         
-        h_i, w_i = img.shape[:2]
-        inner_mask = np.zeros((h_i, w_i), dtype=np.uint8)
-        inner_mask[12:h_i-12, 12:w_i-12] = 255
-        mask = cv2.bitwise_and(mask, inner_mask)
-        return mask
+        return self._suppress_border(mask)
 
     def segment_universal_adaptive(self, img):
         """
@@ -136,11 +130,7 @@ class HSVSegmenter:
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
         closed = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, k, iterations=3)
         
-        # Border suppression
-        h_i, w_i = img.shape[:2]
-        inner_mask = np.zeros((h_i, w_i), dtype=np.uint8)
-        inner_mask[12:h_i-12, 12:w_i-12] = 255
-        return cv2.bitwise_and(closed, inner_mask)
+        return self._suppress_border(closed)
 
     def clean_mask(self, mask, open_size=5, close_size=9, close_iters=2):
         """
@@ -199,7 +189,57 @@ class HSVSegmenter:
         skin_dilated = cv2.dilate(skin_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)))
         return cv2.bitwise_and(mask, cv2.bitwise_not(skin_dilated))
 
-    def detect_and_extract_pieces(self, img, method='hsv_otsu', use_watershed=False, filter_skin=False):
+    def normalize_crop_background(self, crop_bgr, piece_mask=None):
+        """
+        Replaces external background/skin pixels in a crop with the dataset's
+        reference backlit background color (BGR ~ [242, 195, 160]) so external
+        photos match the training distribution.
+        """
+        h, w = crop_bgr.shape[:2]
+        if self.bg_b is not None:
+            bg_patch = cv2.resize(self.bg_b, (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            bg_patch = np.full((h, w, 3), (242, 195, 160), dtype=np.uint8)
+
+        if piece_mask is None or np.count_nonzero(piece_mask) < 0.05 * piece_mask.size:
+            return crop_bgr
+
+        # Feather mask slightly for natural edge transition
+        soft_mask = cv2.GaussianBlur(piece_mask.astype(np.float32) / 255.0, (3, 3), 0)[..., None]
+        blended = (crop_bgr.astype(np.float32) * soft_mask + bg_patch.astype(np.float32) * (1.0 - soft_mask)).astype(np.uint8)
+        return blended
+
+    def extract_whole_image_as_piece(self, img, filter_skin=False):
+        """
+        Treats an already-cropped image directly as a single LEGO piece without
+        requiring full-table contour cropping. Still computes a foreground mask for display.
+        """
+        h_img, w_img = img.shape[:2]
+        raw_mask = self.segment_hsv_otsu(img)
+        if filter_skin:
+            raw_mask = self.remove_skin_tones(img, raw_mask)
+        mask = self.clean_mask(raw_mask, open_size=3, close_size=5, close_iters=1)
+        if np.count_nonzero(mask) < 0.05 * mask.size:
+            mask = np.full((h_img, w_img), 255, dtype=np.uint8)
+
+        cnt = np.array([[[2, 2]], [[w_img - 3, 2]], [[w_img - 3, h_img - 3]], [[2, h_img - 3]]], dtype=np.int32)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            best_c = max(contours, key=cv2.contourArea)
+            if cv2.contourArea(best_c) > 0.05 * (h_img * w_img):
+                cnt = best_c
+
+        piece = {
+            "contour": cnt,
+            "area": float(cv2.contourArea(cnt)),
+            "tight_bbox": (0, 0, w_img, h_img),
+            "padded_bbox": (0, 0, w_img, h_img),
+            "crop": img.copy(),
+            "piece_mask": mask.copy()
+        }
+        return mask, [piece]
+
+    def detect_and_extract_pieces(self, img, method='hsv_otsu', use_watershed=False, filter_skin=False, only_main_piece=False):
         """
         Executes end-to-end segmentation:
         1. Segment image to binary mask
@@ -212,7 +252,9 @@ class HSVSegmenter:
             clean_mask: binary mask (0 or 255)
             pieces: list of dicts with bounding boxes, crops, contours, and areas.
         """
-        if method == 'hsv_otsu':
+        if method == 'direct_crop':
+            return self.extract_whole_image_as_piece(img, filter_skin=filter_skin)
+        elif method == 'hsv_otsu':
             raw_mask = self.segment_hsv_otsu(img)
         elif method == 'hsv_adaptive':
             raw_mask = self.segment_hsv_adaptive(img)
@@ -242,6 +284,13 @@ class HSVSegmenter:
                 continue
                 
             x, y, w, h = cv2.boundingRect(cnt)
+            hull = cv2.convexHull(cnt)
+            hull_area = max(1.0, float(cv2.contourArea(hull)))
+            solidity = area / hull_area
+            aspect = float(max(w, h)) / max(1.0, float(min(w, h)))
+            # Filter obvious text/line artifacts when filtering skin or external photos
+            if (filter_skin or only_main_piece) and (solidity < 0.35 or aspect > 5.5):
+                continue
             
             # Apply configurable margin
             x1 = max(0, x - self.margin)
@@ -263,6 +312,11 @@ class HSVSegmenter:
             
         # Sort pieces by area descending
         pieces.sort(key=lambda p: p["area"], reverse=True)
+        if only_main_piece and len(pieces) > 1:
+            pieces = [pieces[0]]
+            clean_single = np.zeros_like(mask)
+            cv2.drawContours(clean_single, [pieces[0]["contour"]], -1, 255, -1)
+            mask = clean_single
         return mask, pieces
 
     def draw_detections(self, img, pieces, labels=None, confidences=None):
